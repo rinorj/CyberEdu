@@ -2,6 +2,9 @@ var app = require('http').createServer(handler)
 var io = require('socket.io')(app);
 var fs = require('fs');
 
+// Include modules here.
+eval(fs.readFileSync('coffee_shop.js').toString());
+
 app.listen(8011);
 
 function handler (request, response) {
@@ -363,6 +366,7 @@ io.on('connection', function (socket) {
 	 *  dialogs: An object used as a map of <dialog name> --> <dialog object>
 	 *  filesystems: An object used as a map of <filesystem name> --> <filesystem object>
 	 *  webpages: An object used as a map of <URL> --> <screen object>
+	 *  background_music: An object used as a map of <screen name> --> <audio id>; the screens in this map must be "Main" Screens (i.e. not browsers, phone screens, etc.)
 	 * 	phone: An object representing the state of the user's phone, which has the following fields:
 	 *		visible: A boolean, true if the phone is visible, false if it is not (not on the screen at all)
 	 *		raised: A boolean, true if the phone is in the raised position, false if it is in the lowered position
@@ -376,9 +380,12 @@ io.on('connection', function (socket) {
 	 *		name: The name of the active dialog
 	 *		replace_phone: A boolean, true if the phone should be shown when this dialog is closed
 	 *  active_filesystem: The name of the active computer filesystem.
+	 *  active_audio_ids: An array of the string ID's of the audio elements which are currently active.
+	 *  player_name: The name of the player.
+	 *  partner_name: The name of the partner.
 	 */
 	 
-	var game = { canvas:{x:1000, y:600}, screens:{}, browsers:{}, dialogs:{}, filesystems:{}, webpages:{}, phone:{visible:false, raised:false, screen_on:true, screen:"phoneBlankScreen"}, phone_apps:[], mailbox:[], main_screen:"testMainScreen", active_dialog:{name:"testDialog", replace_phone:true}};
+	var game = { canvas:{x:1000, y:600}, screens:{}, browsers:{}, dialogs:{}, filesystems:{}, webpages:{}, background_music:{}, phone:{visible:false, raised:false, screen_on:true, screen:"phoneHomeScreen"}, phone_apps:[], mailbox:[], main_screen:"testMainScreen", active_dialog:{name:"testDialog", replace_phone:true}, player_name:"Bobby", partner_name:"Ashley"};
 	game.screens["phoneBlankScreen"] = new Screen(game.canvas.x - PHONE_SCREEN_X, game.canvas.y - PHONE_SCREEN_Y, PHONE_SCREEN_LAYER, new Image ("image/phone/screen/on", 0, 0, 0), [new Button("testButton", 50, 50, 100, 100)], [], [new Rectangle("testRect", 50, 50, 100, 100, 1, "rgba(0,0,0,1)")]);
 	game.screens["testMainScreen"] = new Screen(0, 0, 0, new Rectangle("bigRedRectangle", 0, 0, game.canvas.x, game.canvas.y, 0, 'rgba(255,0,0,1)'), [], [], []);
 	game.screens["phoneHomeScreen"] = new Screen(game.canvas.x - PHONE_SCREEN_X, game.canvas.y - PHONE_SCREEN_Y, PHONE_SCREEN_LAYER, new Image ("image/phone/screen/on", 0, 0, 0), [], [], []);
@@ -393,6 +400,7 @@ io.on('connection', function (socket) {
 	game.screens["phoneMapAppScreen"] = new Screen(game.canvas.x - PHONE_SCREEN_X, game.canvas.y - PHONE_SCREEN_Y, PHONE_SCREEN_LAYER, new Image ("image/phone/screen/on", 0, 0, 0), [], [], []);
 	addButtonToScreen(game.screens["phoneMapAppScreen"], new Button("phone-exit-app", 0, 0, 173, 30, "Exit Map", "24px Times", "rgba(255,255,255,1)", 2));
 	addButtonToScreen(game.screens["phoneMapAppScreen"], new Button ("go_to_red_screen", 0, 30, 173, 60, "Go to Red Screen", "24px Times", "rgba(255,255,255,1)", 2));
+	addButtonToScreen(game.screens["phoneMapAppScreen"], new Button ("go_to_coffee_shop", 0, 60, 173, 90, "Go to Coffee Shop", "18px Times", "rgba(255,255,255,1)", 2));
 	
 	game.browsers["testBrowser"] = new Browser();
 	
@@ -403,7 +411,11 @@ io.on('connection', function (socket) {
 	addToFileSystem(game.filesystems["testFilesystem"], "", new Folder ("test_dir", ["a.txt", "b.txt"]));
 	
 	addToMailbox(new EmailMessage ("Testing", "Jonathan", "Hello, this is a test of the email system", []));
+		
+	// Load the modules into the game state object.
+	load_coffee_shop (game);
 		 
+	// TODO INITIALIZE THE MUSIC PROPERLY IF LOADED FROM A SAVE! WHATEVER AUDIO WAS ACTIVE SHOULD BE RESTARTED!
 	// Send commands to client, to initialize it to the current game state, which may be loaded or the default.
 	var init_commands = [];
 	init_commands.push(["resizeCanvas", game.canvas.x, game.canvas.y]);
@@ -878,6 +890,17 @@ io.on('connection', function (socket) {
 	function changeMainScreen (name) {
 		var commands = [];
 		
+		if (typeof game.background_music[game.main_screen] === 'undefined' && typeof game.background_music[name] !== 'undefined') {
+			playAudio(game.background_music[name]);
+		} else if (typeof game.background_music[game.main_screen] !== 'undefined' && typeof game.background_music[name] === 'undefined') {
+			stopAudio(game.background_music[game.main_screen]);
+		} else if (typeof game.background_music[game.main_screen] !== 'undefined' && typeof game.background_music[name] !== 'undefined') {
+			if (game.background_music[game.main_screen] != game.background_music[name]) {
+				stopAudio(game.background_music[game.main_screen]);
+				playAudio(game.background_music[game.screen]);
+			}
+		}		
+		
 		if (game.screens[game.main_screen]["on_screen"]) {
 			clearDisplayObject(game.screens[game.main_screen], commands);
 			drawDisplayObject(game.screens[name], commands);
@@ -985,8 +1008,41 @@ io.on('connection', function (socket) {
 		if (removeCount != 1) console.log("Warning, call to removeTextInputFieldFromScreen removed " + removeCount + " fields. Arguments were screen = " + screen + "field = " + field);
 		socket.emit('command', commands);
 	}
+	
+	/* Starts playing an audio file. The audioID is a string, which matches the ID of the audio element in the HTML code. */
+	function playAudio (audioID) {
+		var commands = [];
+		
+		commands.push(["playSound", audioID]);
+				
+		socket.emit('command', commands);
+	}
+	
+	/* This method stops playing an audio file. The audioID is a string as above. */
+	function stopAudio (audioID) {
+		var commands = [];
+
+		commands.push(["stopSound", audioID]);
+			
+		socket.emit('command', commands);
+	}
+	
+	/* Plays the specified video. 
+	 * Upon completion of playback, returns to the game automatically. */
+	function playVideo (videoID) {
+		var commands = [];
+		
+		commands.push(["playVideo", videoID]);
+		
+		socket.emit('command', commands);
+	}
 		
 	socket.on('click', function (button) {
+		// Handle events in the modules
+		if (coffee_shop_onclick(button, showDialog, closeDialog, changeMainScreen, resizeCanvas, addElementToScreen, playVideo, game.coffee_shop_variables)) {
+			return;
+		}
+	
 		for (var i = 0; i < game.phone_apps.length; i++) {
 			if (button == game.phone_apps[i].name + "_start_button") {
 				changePhoneScreen(game.phone_apps[i].screen_name);
@@ -1061,6 +1117,8 @@ io.on('connection', function (socket) {
 			}
 		} else if (button == 'go_to_red_screen') {
 			changeMainScreen("testMainScreen");
+		} else if (button == 'go_to_coffee_shop') {
+			// Handled in coffee_shop.js file.
 		} else if (button == 'phone-exit-app') {
 			changePhoneScreen("phoneHomeScreen");
 		} else {
